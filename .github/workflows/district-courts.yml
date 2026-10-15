@@ -18,12 +18,17 @@
 # (dates empty) each complex continues from its own "done up to" marker, and a
 # complex with no marker starts from 1 January.
 #
-# No daily schedule yet: which states run daily is decided after the first
-# all-states run.
+# Daily schedule (test, October 2026): ALL states, YESTERDAY only (India time,
+# worked out once when the run starts), never the automatic mode -- most
+# complexes have no marker yet and would start from 1 January. A dated run
+# also sets each finished complex's marker. GitHub starts scheduled runs 4-6 h
+# late, so "yesterday" is the day before the run actually starts.
 
 name: JurisBound – District courts
 
 on:
+  schedule:
+    - cron: "0 17 * * *"      # 22:30 IST
   workflow_dispatch:
     inputs:
       state_codes:
@@ -60,14 +65,32 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       groups: ${{ steps.groups.outputs.groups }}
+      start: ${{ steps.dates.outputs.start }}
+      end: ${{ steps.dates.outputs.end }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v5
 
+      - name: Choose the dates
+        # Scheduled run: yesterday in India time, the same for every job.
+        # Manual run: the dates in the boxes (empty = automatic mode).
+        id: dates
+        env:
+          IN_START: ${{ github.event.inputs.start_date }}
+          IN_END: ${{ github.event.inputs.end_date }}
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            Y=$(TZ=Asia/Kolkata date -d yesterday +%F)
+            echo "start=$Y" >> "$GITHUB_OUTPUT"; echo "end=$Y" >> "$GITHUB_OUTPUT"
+          else
+            echo "start=$IN_START" >> "$GITHUB_OUTPUT"; echo "end=$IN_END" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
       - name: Make the list of jobs
         id: groups
         env:
-          IN_STATES: ${{ github.event.inputs.state_codes }}
+          IN_STATES: ${{ github.event.inputs.state_codes || 'all' }}
           IN_PER_JOB: ${{ github.event.inputs.complexes_per_job || '30' }}
         run: |
           python3 .github/scripts/plan_groups.py "$IN_STATES" "$IN_PER_JOB" >> "$GITHUB_OUTPUT"
@@ -129,8 +152,8 @@ jobs:
       - name: Run the district scraper
         working-directory: district-court/web
         env:
-          IN_START: ${{ github.event.inputs.start_date }}
-          IN_END: ${{ github.event.inputs.end_date }}
+          IN_START: ${{ needs.plan.outputs.start }}
+          IN_END: ${{ needs.plan.outputs.end }}
           IN_TIMEOUT: ${{ github.event.inputs.timeout_hours || '5.5' }}
         run: |
           ARGS="--sync-s3 --timeout-hours $IN_TIMEOUT --courts_csv $RUNNER_TEMP/courts.csv"

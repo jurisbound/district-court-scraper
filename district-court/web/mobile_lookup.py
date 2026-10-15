@@ -43,6 +43,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
+from src.utils.court_utils import match_case_type
+
 logger = logging.getLogger(__name__)
 
 LOOKUP_MODE = os.environ.get("DC_LOOKUP", "web").strip().lower()
@@ -250,7 +252,12 @@ def _lookup(task, order_data: dict, pdf_code: Optional[str]) -> Optional[dict]:
     if not (number.isdigit() and len(number) <= 7 and year.isdigit()):
         return None
 
-    code = _types_for(task).get(ctype)
+    # JurisBound change: "STC.NI" in the order list is "STC-NI" in the court's
+    # list; see match_case_type. Not found -> the website lookup is tried next
+    # and logs it.
+    types = _types_for(task)
+    matched = match_case_type(ctype, types)
+    code = types.get(matched) if matched else None
     if not code:
         return None
     reply = _request("caseNumberSearch.php", {

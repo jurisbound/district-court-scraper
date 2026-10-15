@@ -52,7 +52,7 @@ import jb_db
 import mobile_lookup
 from archive_manager import S3ArchiveManager
 from src.captcha_solver.main import get_text
-from src.utils.court_utils import CourtComplex, load_courts_csv
+from src.utils.court_utils import CourtComplex, load_courts_csv, match_case_type
 from gs import check_ghostscript_available, compress_pdf_if_enabled
 
 # Configure logging
@@ -273,6 +273,11 @@ def save_completed_task(task_key: str):
 
 def is_task_completed(task) -> bool:
     """Check if a task has already been completed"""
+    # JurisBound change: recheck_missing.py must search a day again even if this
+    # machine finished it before (the completed-tasks file is local to the
+    # machine; a GitHub runner starts without it). It sets DC_IGNORE_COMPLETED=1.
+    if os.environ.get("DC_IGNORE_COMPLETED") == "1":
+        return False
     task_key = get_task_key(task)
     completed = load_completed_tasks()
     return task_key in completed
@@ -1189,10 +1194,26 @@ class Downloader:
             self._case_type_codes = self.get_case_type_codes()
 
         # Look up internal case type code (e.g., "OS" -> "17^43")
-        case_type_code = self._case_type_codes.get(case_type)
+        # JurisBound change: exact name first, then the same name without dots /
+        # hyphens / spaces ("STC.NI" -> "STC-NI"); see match_case_type. A case
+        # type that is still not found is logged as a warning, so it shows in
+        # the run log (it was a debug line, never shown).
+        matched = match_case_type(case_type, self._case_type_codes)
+        case_type_code = self._case_type_codes.get(matched) if matched else None
         if not case_type_code:
-            logger.debug(f"Unknown case type: {case_type}, cannot fetch details")
+            if not self._case_type_codes:
+                logger.warning(
+                    f"Case type list of {self.task.complex_name} could not be read "
+                    f"-- cannot look up {case_number_full}"
+                )
+            else:
+                logger.warning(
+                    f"Case type {case_type!r} is not in the case type list of "
+                    f"{self.task.complex_name} -- cannot look up {case_number_full}"
+                )
             return {}
+        if matched != case_type:
+            logger.info(f"Case type {case_type!r} matched {matched!r} for {case_number_full}")
 
         # Step 1: Search case status to get list of matching cases
         logger.debug(
@@ -1776,14 +1797,36 @@ class Downloader:
                 # cannot open it. Mirror this one order to our own bucket as an
                 # addressable file and write the matching database row. The tar
                 # above is left exactly as it was.
-                jb_db.record_order(
+                if jb_db.record_order(
                     metadata,
                     pdf_content,
                     year=year,
                     pdf_filename=pdf_filename,
                     metadata_filename=metadata_filename,
-                )
+                ):
+                    # JurisBound change: if this order was on the missing-PDF
+                    # list (a re-check found it), mark it found.
+                    jb_db.mark_missing_found(self.task.complex_code, pdf_code, pdf_filename)
                 return True
+            # JurisBound change: the PDF did not download. If it fails in
+            # MISSING_PDF_STRIKES separate runs (the court has not uploaded the
+            # file), it is set aside on the missing_orders list and no longer
+            # holds the day back; recheck_missing.py tries it again weekly.
+            if pdf_code:
+                strikes, status = jb_db.record_missing_pdf(self.task, pdf_code, order_data, _RUN_ID)
+                if status in ("set_aside", "given_up"):
+                    logger.warning(
+                        f"PDF not saved for {order_data.get('case_number')} "
+                        f"({order_data.get('order_date')}) on {strikes} separate runs "
+                        f"-- {status} on the missing-PDF list, no longer holds the day back"
+                    )
+                    return False
+                if strikes:
+                    logger.warning(
+                        f"PDF not saved for {order_data.get('case_number')} "
+                        f"({order_data.get('order_date')}) -- strike {strikes} of "
+                        f"{jb_db.MISSING_PDF_STRIKES}"
+                    )
             # JurisBound change: count it, so download() leaves the day not-done.
             self.failed_orders += 1
             logger.warning(

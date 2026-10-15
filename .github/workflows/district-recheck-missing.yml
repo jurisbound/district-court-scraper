@@ -1,0 +1,77 @@
+# JurisBound - weekly re-check of district orders whose PDF the court had not
+# uploaded (table missing_orders, status set_aside). Each due order is tried
+# again once a week, 4 times; a PDF that now downloads is saved like any order.
+# See district-court/web/recheck_missing.py.
+#
+# Shares the concurrency group of the daily district workflow, so the two
+# never run at the same time (they could work on the same court complex).
+
+name: JurisBound – District re-check of missing PDFs
+
+on:
+  schedule:
+    - cron: "0 17 * * 0"      # Sundays 22:30 IST (GitHub usually starts it 4-6 h late)
+  workflow_dispatch:
+    inputs:
+      list_only:
+        description: "true = only list the orders that are due, re-check nothing"
+        required: false
+        default: "false"
+      timeout_hours:
+        description: "Stop starting new days after this many hours (GitHub stops jobs at 6)."
+        required: false
+        default: "5.5"
+
+concurrency:
+  group: district-courts
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUNBUFFERED: "1"
+      DC_LOOKUP: mobile
+      # Azure: orders into schema jb_kb as the login jb_court, PDFs into Azure Blob
+      DATABASE_URL: ${{ secrets.AZURE_KB_ASYNC_DATABASE_URL }}
+      SYNC_DATABASE_URL: ${{ secrets.AZURE_KB_DATABASE_URL }}
+      STORAGE_BACKEND: azure
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+      SUPABASE_S3_BUCKET: court-documents
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: district-court/requirements.txt
+
+      - name: Install Ghostscript (PDF compression)
+        run: sudo apt-get update -q && sudo apt-get install -y -q ghostscript
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+            -r district-court/requirements.txt
+
+      - name: Re-check missing PDFs
+        working-directory: district-court/web
+        env:
+          IN_LIST: ${{ github.event.inputs.list_only || 'false' }}
+          IN_TIMEOUT: ${{ github.event.inputs.timeout_hours || '5.5' }}
+        run: |
+          ARGS="--timeout-hours $IN_TIMEOUT"
+          [ "$IN_LIST" = "true" ] && ARGS="$ARGS --list"
+          echo "Running: python recheck_missing.py $ARGS"
+          # Exit code 2 = the court website blocked this runner's address.
+          python recheck_missing.py $ARGS

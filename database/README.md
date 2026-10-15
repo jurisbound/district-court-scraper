@@ -16,6 +16,7 @@ The same folder is kept in every JurisBound court repository. **The copies must 
 | 4 | `04_doc_numbers.sql` | JurisBound document numbers (`JB-HC-TS-2026-0000001`): two small tables, the `doc_number` index, and the rule that gives every new row its number when it is inserted |
 | 5 | `05_doc_number_codes.sql` | The short codes used in the numbers: 25 High Courts, 36 states, every district. Generated; do not edit by hand |
 | 6 | `06_doc_numbers_backfill.sql` | Numbers for rows saved before the rule existed. **Skip on an empty database** |
+| 7 | `07_missing_orders.sql` | The table `missing_orders`: district orders whose PDF the court has not uploaded (strikes, weekly re-check, status). Used by the district scraper |
 
 Run each file as one transaction and stop at the first error.
 

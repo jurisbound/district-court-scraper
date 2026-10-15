@@ -153,3 +153,33 @@ def get_unique_districts(courts: List[CourtComplex], state_code: str) -> List[tu
             seen.add(key)
             result.append((court.district_code, court.district_name))
     return result
+
+
+# JurisBound change: the order list and the court's case-type list do not always
+# write a case type the same way: the 14 Oct 2026 order list of Karimnagar PDJ
+# Court Complex says "STC.NI/76/2021" while that court's case-type list says
+# "STC-NI". An exact match failed, so the case was never looked up and the
+# order never saved. Used by the website lookup (download.py) and the app
+# lookup (mobile_lookup.py).
+def _case_type_key(name: str) -> str:
+    """Case type without dots, hyphens, spaces or other punctuation, upper case."""
+    return "".join(ch for ch in (name or "").upper() if ch.isalnum())
+
+
+def match_case_type(case_type: str, names) -> Optional[str]:
+    """The name in `names` (a court's case types) that `case_type` refers to.
+
+    Exact match first. Otherwise the names are compared without dots, hyphens
+    and spaces ("STC.NI" = "STC-NI" = "STC NI"); that match is used only when
+    exactly one name fits, so an unclear case never picks a wrong type.
+    Returns None when nothing (or more than one) fits.
+    """
+    if not case_type:
+        return None
+    if case_type in names:
+        return case_type
+    key = _case_type_key(case_type)
+    if not key:
+        return None
+    hits = [n for n in names if _case_type_key(n) == key]
+    return hits[0] if len(hits) == 1 else None

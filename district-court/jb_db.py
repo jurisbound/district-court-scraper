@@ -293,3 +293,96 @@ def record_order(
     except Exception as e:  # never break the scrape
         logger.warning("district-court: record_order failed for %s (%s)", pdf_filename, e)
         return False
+
+
+# ── orders whose PDF the court has not uploaded ─────────────────────────────
+# JurisBound change (2026-10-15): an order the court lists but whose PDF never
+# downloads (the court's site says the file is not uploaded) used to hold its
+# day back on every run, so the complex was never marked done. Each run that
+# fails adds one strike to the table `missing_orders`
+# (database/07_missing_orders.sql); from MISSING_PDF_STRIKES strikes on the
+# order is "set_aside" and no longer holds the day back. recheck_missing.py
+# tries set-aside orders again once a week (4 times); when the PDF is finally
+# saved the row becomes "found".
+
+MISSING_PDF_STRIKES = int(os.environ.get("DC_MISSING_PDF_STRIKES", "3"))
+
+
+def record_missing_pdf(task, pdf_code: str, order_data: dict, run_id: str) -> tuple[int, Optional[str]]:
+    """Add this run's strike for an order whose PDF did not download and return
+    (strikes, status). One strike per run, however often the order is seen in
+    that run. Returns (0, None) if the table cannot be reached, so the caller
+    treats the order as an ordinary failure (the day stays not done)."""
+    try:
+        from sqlalchemy import text
+
+        from storage.database import SyncSessionLocal
+
+        with SyncSessionLocal() as session:
+            row = session.execute(
+                text(
+                    """
+                    INSERT INTO missing_orders AS m
+                        (state_code, district_code, complex_code, complex_name,
+                         case_number, order_date, pdf_code, strikes, last_tried, last_run)
+                    VALUES (:state, :district, :complex, :complex_name,
+                            :case_number, :order_date, :pdf_code, 1, now(), :run)
+                    ON CONFLICT (complex_code, pdf_code) DO UPDATE SET
+                        strikes    = m.strikes + CASE WHEN m.last_run IS DISTINCT FROM :run THEN 1 ELSE 0 END,
+                        last_tried = now(),
+                        last_run   = :run
+                    RETURNING id, strikes, status
+                    """
+                ),
+                {
+                    "state": str(task.state_code),
+                    "district": str(task.district_code),
+                    "complex": str(task.complex_code),
+                    "complex_name": getattr(task, "complex_name", None),
+                    "case_number": order_data.get("case_number"),
+                    "order_date": _to_date(order_data.get("order_date")),
+                    "pdf_code": pdf_code,
+                    "run": run_id,
+                },
+            ).one()
+            row_id, strikes, status = row
+            if status == "retrying" and strikes >= MISSING_PDF_STRIKES:
+                session.execute(
+                    text("UPDATE missing_orders SET status = 'set_aside' WHERE id = :id"),
+                    {"id": row_id},
+                )
+                status = "set_aside"
+            session.commit()
+            return strikes, status
+    except Exception as e:  # never break the scrape
+        logger.warning("district-court: could not update missing_orders for %s (%s)",
+                       order_data.get("case_number"), e)
+        return 0, None
+
+
+def mark_missing_found(complex_code: str, pdf_code: Optional[str], pdf_filename: str) -> None:
+    """The order's PDF is now saved: mark its missing_orders row (if any) found
+    and link the judgment row. No row -> nothing happens."""
+    if not pdf_code:
+        return
+    try:
+        from sqlalchemy import text
+
+        from storage.database import SyncSessionLocal
+
+        with SyncSessionLocal() as session:
+            session.execute(
+                text(
+                    """
+                    UPDATE missing_orders SET
+                        status = 'found', found_at = now(),
+                        doc_id = (SELECT id FROM scraped_documents
+                                  WHERE pdf_path LIKE '%/' || :fname LIMIT 1)
+                    WHERE complex_code = :complex AND pdf_code = :pdf_code AND status <> 'found'
+                    """
+                ),
+                {"complex": str(complex_code), "pdf_code": pdf_code, "fname": pdf_filename},
+            )
+            session.commit()
+    except Exception as e:  # never break the scrape
+        logger.warning("district-court: could not mark %s found in missing_orders (%s)", pdf_filename, e)
