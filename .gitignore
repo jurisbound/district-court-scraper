@@ -1,0 +1,24 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# local run state (never committed)
+logs/
+data/
+captcha-tmp/
+captcha-failures/
+html-parse-failures.txt
+index_cache/
+sc_data/
+temp-files/
+packages/
+local_*/
+dc_completed_tasks.json
+dc_lookup_compare.jsonl

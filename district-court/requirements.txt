@@ -1,0 +1,30 @@
+# District scraper (web route + app lookup + mobile scraper), as installed by
+# the GitHub Actions workflow. Same packages as pyproject.toml, plus what the
+# JurisBound additions need (they live outside this folder, in v2/storage and
+# v2/configs).
+
+# --- original (pyproject.toml) ---
+beautifulsoup4>=4.13
+boto3>=1.40
+colorlog>=6.9
+lxml>=6.0
+onnx>=1.18
+onnxruntime>=1.22
+pandas>=2.3
+pillow>=11.2
+pyarrow>=21.0
+requests>=2.32
+tokenizers>=0.21
+torch>=2.7          # CAPTCHA reader; the workflow installs the CPU-only build
+torchvision>=0.22
+tqdm>=4.67
+
+# --- JurisBound additions ---
+sqlalchemy[asyncio]>=2.0,<2.1  # database rows; [asyncio] adds greenlet (storage/database.py); <2.1 = the tested series -- 2.1 reads "postgresql://" as a different driver
+asyncpg>=0.29           # storage/database.py builds its async engine at import
+psycopg2-binary>=2.9    # the sync engine the scrapers write through
+pydantic-settings>=2.0  # configs/settings.py
+python-dotenv>=1.0      # reads .env (repo root) on a laptop; GitHub passes secrets as env vars
+pycryptodome>=3.20      # app (mobile API) encryption -- the app lookup
+# Azure Blob Storage, used when STORAGE_BACKEND=azure (storage/blob_store.py)
+azure-storage-blob==12.31.0

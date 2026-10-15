@@ -1,0 +1,10 @@
+# Local run state of the district web scraper -- never committed. The index,
+# "done up to" markers and not-found lists live in storage, not here.
+local_dc_judgments_data/
+local_dc_judgments_data.*/
+dc_completed_tasks.json
+dc_lookup_compare.jsonl
+packages/
+captcha-tmp/
+captcha-failures/
+html-parse-failures.txt
