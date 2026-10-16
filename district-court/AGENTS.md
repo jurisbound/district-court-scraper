@@ -1,6 +1,14 @@
 # AGENTS.md
 
+Developer notes for `district-court/`. Last updated 16 October 2026. **This folder is kept identical in `court-scrapers` and `district-court-scraper`** (the public repository the GitHub runs use); change both together.
 
+## Current state (October 2026)
+
+- **Azure since 15 Oct 2026:** bundles, index files, markers and the loose PDFs go to Azure Blob Storage (`storage/blob_store.py`, `STORAGE_BACKEND=azure`); rows go to `jb_kb.scraped_documents`. The Supabase lines below describe how it was set up before.
+- **GitHub (district-court-scraper):** the chosen states are split into groups of whole districts (~30 complexes each, `.github/scripts/plan_groups.py`); each group is one job with its own court list (`--courts_csv`), at most 20 at a time. Daily 22:30 IST, all states, **yesterday's date** (never the automatic mode yet — most complexes had no marker). Weekly re-check on Sundays.
+- **Case types written differently** (`STC.NI` in the order list, `STC-NI` in the court's case-type list): exact match first, then without dots / hyphens / spaces, only if exactly one fits (`web/src/utils/court_utils.match_case_type`, used by `download.py` and `mobile_lookup.py`). A case type still not found is logged as a warning.
+- **PDF the court never uploaded:** one strike per run in the table `missing_orders` (`database/07_missing_orders.sql`, `jb_db.record_missing_pdf`); after 3 runs the order is `set_aside` and no longer holds its day back. `web/recheck_missing.py` (weekly) re-runs those dates for those complexes, 4 times; then `given_up`. A PDF saved later marks its row `found` (`jb_db.mark_missing_found`). The re-check sets `DC_IGNORE_COMPLETED=1` so a machine that finished the day before still searches it.
+- **Tested on Azure 14–16 Oct 2026, Telangana (123 complexes), 14 Oct:** 3 runs of 4 parallel jobs, no block; 145 orders; then Karimnagar (STC.NI/76/2021 saved after the case-type fix), Jinnaram and Godavarikhani (4 orders not uploaded by the court set aside after 3 runs, both complexes marked done); 119 of 123 complexes done (the other 4: date search failures on the court site).
 
 ## The two routes, and which one we use
 
@@ -58,7 +66,7 @@ Neither `generate_parquet.py` nor `flush_pending.py` has been run since being ch
 
 ## Storage
 
-Their tar archives are left exactly as original wrote them. `jb_db` writes a **second, addressable copy** of each order to our Supabase bucket, because a PDF inside a tar has no URL of its own and the `cli.py ocr` → `analyze` → `index` pipeline fetches one PDF at a time.
+Their tar archives are left exactly as original wrote them. `jb_db` writes a **second, addressable copy** of each order to our storage (Azure Blob Storage since 15 Oct 2026), because a PDF inside a tar has no URL of its own and the `cli.py ocr` → `analyze` → `index` pipeline fetches one PDF at a time.
 
 Current key layout (names come from `courts.csv`, slugged):
 
@@ -137,5 +145,5 @@ recorded in full in the `project-district-two-route-collision` memory:
 ## Not done yet
 
 - The mobile route (`mobile/scraper.py`) now writes order PDFs + `scraped_documents` rows through `jb_db`, and one `court_cases` row per case through `cases_db.py` (cases with no PDF go only to `court_cases`). It has had one small live run (AS/2018) and is **not** part of any workflow yet. Never run it on the same court at the same time as the web route.
-- The deferred CNR-bridge test: whether `caseNumberSearch.php` can turn a web-route case number into a CNR without a CAPTCHA.
+- The CNR bridge (`caseNumberSearch.php` turns a case number into a CNR without a CAPTCHA) was tested on 29 Sep 2026 and is in use: `web/mobile_lookup.py` (`DC_LOOKUP=mobile`).
 - `--sync-s3-fill` (historical gap-fill mode) has a known fix pending; use explicit `--start_date/--end_date` runs for backfills instead.
