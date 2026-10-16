@@ -4,11 +4,11 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    JSON, Boolean, Column, Date, DateTime, Float, ForeignKey,
+    JSON, Boolean, Column, Date, DateTime, FetchedValue, Float, ForeignKey,
     Index, Integer, String, Text, UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import DeclarativeBase, deferred, relationship
 
 
 class Base(DeclarativeBase):
@@ -47,7 +47,7 @@ class ScrapedDocument(Base):
     summary = Column(Text)                      # 2-3 sentence AI-generated summary
 
     pdf_url = Column(String(500))
-    pdf_path = Column(String(500))  # local MinIO path
+    pdf_path = Column(String(500))  # key of the PDF in storage
     source_url = Column(String(500))
 
     # Structured extraction fields (populated by LLM analyzer)
@@ -65,6 +65,24 @@ class ScrapedDocument(Base):
     headnotes = Column(Text)                    # key legal propositions
     category = Column(String(100))              # LLM-classified: Civil / Criminal / Constitutional / ...
     keywords = Column(JSON, default=list)       # ["writ jurisdiction", "land acquisition", ...]
+    # Analysis v2 (2026-10-07). document_type: final_judgment / interim_order /
+    # bail_order / daily_order / decree / other (NULL = not analysed yet).
+    # sensitive_case: sexual offence / POCSO / juvenile / family -- a label only;
+    # names are shown as the court gives them. names_hidden: the accused is a
+    # child (Juvenile Justice Act s.74) -- private party names are masked in API
+    # responses. Both set by the analyzer or, before analysis, by the OCR step's
+    # keyword check.
+    document_type = Column(String(30), index=True)
+    sensitive_case = Column(Boolean, nullable=False, default=False)
+    names_hidden = Column(Boolean, nullable=False, default=False)
+    reportable = Column(Boolean)
+    # JurisBound number, e.g. JB-HC-TS-2026-0000001. Written by the database
+    # trigger on insert (database/04_doc_numbers.sql) -- never set it here.
+    doc_number = Column(String(40), unique=True, server_default=FetchedValue())
+    # Reading-view layout built from the PDF's own line positions (cli.py layout,
+    # pipeline/layout_reader.py): {"v": 1, "blocks": [{"k": kind, "t": text, "b": bold}]}.
+    # Deferred: large, and only the judgment page needs it.
+    layout = deferred(Column(JSONB))
 
     is_indexed = Column(Boolean, default=False)  # vector indexed?
     ocr_done = Column(Boolean, default=False)    # OCR extraction done?
